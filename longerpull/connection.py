@@ -8,87 +8,91 @@ import json
 import logging
 import struct
 import zlib
-from . import commands
 
-logger = logging.getLogger('longerpull')
+logger = logging.getLogger('lp.conn')
 
-Preamble = collections.namedtuple('Preamble', 'size, ident, use_zlib')
+Preamble = collections.namedtuple('Preamble', 'size, cmd_id, use_zlib')
+
+
+class ConnectionException(Exception):
+    pass
+
+
+class Disconnected(ConnectionException):
+    pass
+
+
+class BadVersion(ConnectionException):
+    pass
 
 
 class LPConnection(object):
 
     __slots__ = (
+        'reader',
+        'writer'
     )
     version = 1
     chksum_magic = 194
-    #identer = itertools.count()
-    preamble = struct.Struct("!BBIIB")
+    preamble = struct.Struct("!BIIB")
+    identer = itertools.count()
+
+    def __init__(self, reader, writer):
+        self.ident = next(self.identer)
+        self.reader = reader
+        self.writer = writer
+        self.peername = '%s:%d' % writer.get_extra_info('socket').getpeername()
+
+    def __str__(self):
+        return '<%s [%s] ident:%d>' % (type(self).__qualname__, self.peername,
+                                       self.ident)
 
     def chksum(self, value):
         return self.chksum_magic ^ ((value & 0xff) ^ 0xff)
 
-    def encode(self, ident, value):
+    def encode(self, cmd_id, value):
+        use_zlib = False  # TODO: eval pros/cons
         data = json.dumps(value).encode()
         size = len(data)
-        #ident = next(self.identer)
-        chksum = self.chksum(size + ident)
-        preamble = self.preamble.pack(self.version, chksum, size, ident, 0)
+        chksum = self.chksum(size + cmd_id)
+        preamble = self.preamble.pack(chksum, size, cmd_id, use_zlib)
         return preamble + data
 
     def decode_preamble(self, data):
-        print(len(data))
-        ver, chksum, size, ident, use_zlib = self.preamble.unpack(data)
-        if ver != 1:
-            raise TypeError('unsupported version')
-        elif chksum != self.chksum(size + ident):
+        chksum, size, cmd_id, use_zlib = self.preamble.unpack(data)
+        if chksum != self.chksum(size + cmd_id):
+            print(chksum, size, cmd_id, use_zlib, self.chksum(size+cmd_id))
             raise ValueError('chksum error')
-        return Preamble(size, ident, not not use_zlib)
+        return Preamble(size, cmd_id, not not use_zlib)
 
     def decode_message(self, data, use_zlib):
         if use_zlib:
             data = zlib.decompress(data)
         return json.loads(data.decode())
 
+    def close(self):
+        self.writer.close()
+
 
 class LPServerConnection(LPConnection):
 
-    __slots__ = (
-        'reader',
-        'writer',
-        'commands',
-    )
+    async def check_version(self):
+        version = (await self.reader.read(1))[0]
+        if version != self.version:
+            raise BadVersion('Unsupported version: %d' % version)
 
-    def __init__(self, reader, writer):
-        self.reader = reader
-        self.writer = writer
-        self.commands = {
-            'authorize': self.authorize_command,
-            'check_activation': self.check_activation_command
-        }
-
-    @classmethod
-    async def on_connect(cls, reader, writer):
-        instance = cls(reader, writer)
-        while await instance.parse_command():
-            pass
-
-    async def parse_command(self):
-        print('PAS', self.preamble.size)
+    async def recv(self):
         data = await self.reader.read(self.preamble.size)
         if not data:
-            return False  # connection closed
+            raise Disconnected()
         preamble = self.decode_preamble(data)
         data = await self.reader.read(preamble.size)
-        logger.debug("Parsing Command: %s size:%d zlib:%s" % (preamble.ident,
+        logger.debug("Parsing Command: %s size:%d zlib:%s" % (preamble.cmd_id,
                      preamble.size, preamble.use_zlib))
-        msg = self.decode_message(data, preamble.use_zlib)
-        handler = self.commands[msg['command']]
-        resp = await handler(**msg['args'])
-        print(resp)
-        self.writer.write(self.encode(preamble.ident, resp))
-        await self.writer.drain()
-        return True
+        return preamble.cmd_id, self.decode_message(data, preamble.use_zlib)
 
-
-    async def authorize_command(self, *, username=None, password=None):
-        pass
+    async def send(self, cmd_id, value, drain=True):
+        """ Send a message/reply to the client. """
+        self.writer.write(self.encode(cmd_id, value))
+        if drain:
+            await self.writer.drain()

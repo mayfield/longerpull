@@ -5,7 +5,7 @@ LP commands
 import functools
 import logging
 
-logger = logging.getLogger('longerpull')
+logger = logging.getLogger('lp.commands')
 commands = {}
 
 
@@ -28,11 +28,11 @@ def command(func):
 
 
 @command
-async def authorize_command(username=None, password=None):
+async def authorize(username=None, password=None):
     pass
 
 
 @command
-async def check_activation():
-    pass
+async def check_activation(secrethash=None):
+    return True
 

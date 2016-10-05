@@ -2,12 +2,8 @@
 LP commands
 """
 
-import collections
-import itertools
-import json
+import functools
 import logging
-import struct
-import zlib
 
 logger = logging.getLogger('longerpull')
 commands = {}

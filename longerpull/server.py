@@ -39,16 +39,28 @@ class Server(aiocluster.WorkerService):
         while True:
             try:
                 cmd_id, cmd = await conn.recv()
-            except connection.Disconnected:
+            except EOFError:
                 logger.warning("Disconnected: %s" % conn)
                 break
             handler = commands.commands[cmd['command']]
-            resp = await handler(**cmd['args'])
-            await conn.send(cmd_id, resp)
+            try:
+                envelope = {
+                    "success": True,
+                    "data": await handler(**cmd.get('args', {}))
+                }
+            except Exception as e:
+                logger.exception('Command Exception')
+                envelope = {
+                    "success": False,
+                    "exception": type(e).__name__,
+                    "message": str(e)
+                }
+            await conn.send(cmd_id, envelope)
 
     def on_finish(self, task):
         conn = task.conn
         task.conn = None
+        self.connections.remove(conn)
         try:
             task.result()
         except:

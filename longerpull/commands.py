@@ -28,11 +28,26 @@ def command(func):
 
 
 @command
-async def authorize(username=None, password=None):
-    pass
+async def authorize(username=None, password=None,
+                    token_id=None, token_secret=None):
+    return {"Hello": "World"}
+
+
+@command
+async def register(product=None, mac=None, name=None):
+    return {"client_id": 1, "token_id": 1, "token_secret": "abc"}
 
 
 @command
 async def check_activation(secrethash=None):
+    raise Exception("not supported")
+
+
+@command
+async def bind(client_id=None):
     return True
 
+@command
+async def start_poll(args=None):
+    return {"response_queue": "return_addr", "response_id": 0, "request": {
+        "system": "cs", "options": {}, "command": "get"}}

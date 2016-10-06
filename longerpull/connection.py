@@ -11,14 +11,10 @@ import zlib
 
 logger = logging.getLogger('lp.conn')
 
-Preamble = collections.namedtuple('Preamble', 'size, cmd_id, use_zlib')
+Preamble = collections.namedtuple('Preamble', 'size, msg_id, use_zlib')
 
 
 class ConnectionException(Exception):
-    pass
-
-
-class Disconnected(ConnectionException):
     pass
 
 
@@ -50,20 +46,20 @@ class LPConnection(object):
     def chksum(self, value):
         return self.chksum_magic ^ ((value & 0xff) ^ 0xff)
 
-    def encode(self, cmd_id, value):
-        use_zlib = False  # TODO: eval pros/cons
+    def encode(self, msg_id, value):
+        use_zlib = 0  # TODO: eval pros/cons
         data = json.dumps(value).encode()
-        size = len(data)
-        chksum = self.chksum(size + cmd_id)
-        preamble = self.preamble.pack(chksum, size, cmd_id, use_zlib)
+        size = len(data) + 1  # size includes the compression byte.
+        chksum = self.chksum(size + msg_id)
+        preamble = self.preamble.pack(chksum, size, msg_id, use_zlib)
         return preamble + data
 
     def decode_preamble(self, data):
-        chksum, size, cmd_id, use_zlib = self.preamble.unpack(data)
-        if chksum != self.chksum(size + cmd_id):
-            print(chksum, size, cmd_id, use_zlib, self.chksum(size+cmd_id))
+        chksum, size, msg_id, use_zlib = self.preamble.unpack(data)
+        if chksum != self.chksum(size + msg_id):
+            print(chksum, size, msg_id, use_zlib, self.chksum(size+msg_id))
             raise ValueError('chksum error')
-        return Preamble(size, cmd_id, not not use_zlib)
+        return Preamble(size, msg_id, not not use_zlib)
 
     def decode_message(self, data, use_zlib):
         if use_zlib:
@@ -82,17 +78,21 @@ class LPServerConnection(LPConnection):
             raise BadVersion('Unsupported version: %d' % version)
 
     async def recv(self):
-        data = await self.reader.read(self.preamble.size)
-        if not data:
-            raise Disconnected()
+        """ Read preamble and then full message data from reader stream.
+        Parse the message and return a tuple of the msg id and message
+        value. """
+        data = await self.reader.readexactly(self.preamble.size)
         preamble = self.decode_preamble(data)
-        data = await self.reader.read(preamble.size)
-        logger.debug("Parsing Command: %s size:%d zlib:%s" % (preamble.cmd_id,
+        data = await self.reader.readexactly(preamble.size - 1)
+        logger.debug("Parsing Message: %s size:%d zlib:%s" % (preamble.msg_id,
                      preamble.size, preamble.use_zlib))
-        return preamble.cmd_id, self.decode_message(data, preamble.use_zlib)
+        message = self.decode_message(data, preamble.use_zlib)
+        logger.debug("recv: msg_id:%d %s" % (preamble.msg_id, message))
+        return preamble.msg_id, message
 
-    async def send(self, cmd_id, value, drain=True):
+    async def send(self, msg_id, message, drain=True):
         """ Send a message/reply to the client. """
-        self.writer.write(self.encode(cmd_id, value))
+        logger.debug("send: msg_id:%d %s" % (msg_id, message))
+        self.writer.write(self.encode(msg_id, message))
         if drain:
             await self.writer.drain()

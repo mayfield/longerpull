@@ -5,7 +5,7 @@ Longer Pull Server
 import aiocluster
 import asyncio
 import logging
-from . import connection, commands
+from . import connection, commands, rpc
 
 logger = logging.getLogger('lp.server')
 
@@ -42,11 +42,12 @@ class Server(aiocluster.WorkerService):
             except EOFError:
                 logger.warning("Disconnected: %s" % conn)
                 break
-            handler = commands.commands[cmd['command']]
+            Handler = commands.handlers[cmd['command']]
+            handler = Handler(conn, self, cmd_id)
             try:
                 envelope = {
                     "success": True,
-                    "data": await handler(**cmd.get('args', {}))
+                    "data": await handler.run(**cmd.get('args', {}))
                 }
             except Exception as e:
                 logger.exception('Command Exception')

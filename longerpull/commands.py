@@ -41,8 +41,25 @@ class CommandHandler(object):
         self.msg_id = msg_id
 
     async def reply(self, message):
-        """ Send a reply message using the msg_id of this command. """
-        return await self.conn.send(self.msg_id, message)
+        """ Send a successful reply message. """
+        return await self.conn.send(self.msg_id, {
+            "success": True,
+            "data": message
+        })
+
+    async def reply_exception(self, exc, name=None, msg=None, extra={}):
+        """ Exceptional reply to a command. """
+        if name is None:
+            name = type(exc).__name__.lower()
+        if msg is None:
+            msg = str(exc)
+        resp = {
+            "success": False,
+            "exception": name,
+            "message": msg,
+        }
+        resp.update(extra)
+        return await self.conn.send(self.msg_id, resp)
 
     async def run(self, **command_args):
         raise NotImplementedError("Must be defined in subclass")

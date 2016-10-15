@@ -3,9 +3,9 @@ Server side protocol (for now).
 """
 
 import itertools
-import ujson as json
 import logging
 import struct
+import ujson
 import zlib
 from . import _protocol
 
@@ -48,7 +48,7 @@ class LPConnection(object):
 
     def encode_message(self, value):
         is_compressed = False
-        data = json.dumps(value).encode()
+        data = ujson.dumps(value, ensure_ascii=False).encode()
         return data, is_compressed
 
     def encode_preamble(self, msg_id, size, is_compressed):
@@ -65,7 +65,7 @@ class LPConnection(object):
     def decode_message(self, data, is_compressed):
         if is_compressed:
             data = zlib.decompress(data)
-        return json.loads(data.decode())
+        return ujson.loads(data)
 
     def close(self):
         self.writer.close()

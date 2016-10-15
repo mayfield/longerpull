@@ -40,14 +40,14 @@ class CommandHandler(object):
         self.server = server
         self.msg_id = msg_id
 
-    async def reply(self, message):
+    def reply(self, message):
         """ Send a successful reply message. """
-        return await self.conn.send(self.msg_id, {
+        self.conn.send(self.msg_id, {
             "success": True,
             "data": message
         })
 
-    async def reply_exception(self, exc, name=None, msg=None, extra={}):
+    def reply_exception(self, exc, name=None, msg=None, extra={}):
         """ Exceptional reply to a command. """
         if name is None:
             name = type(exc).__name__.lower()
@@ -59,7 +59,7 @@ class CommandHandler(object):
             "message": msg,
         }
         resp.update(extra)
-        return await self.conn.send(self.msg_id, resp)
+        self.conn.send(self.msg_id, resp)
 
     async def run(self, **command_args):
         raise NotImplementedError("Must be defined in subclass")
@@ -70,8 +70,9 @@ class Authorize(CommandHandler):
 
     name = 'authorize'
 
-    async def run(self, *, token_id=None, token_secret=None):
-        await self.reply({"Hello": "World"})
+    async def run(self, *, username=None, password=None, token_id=None,
+                  token_secret=None):
+        self.reply({"Hello": "World"})
 
 
 @export
@@ -80,7 +81,7 @@ class Register(CommandHandler):
     name = 'register'
 
     async def run(self, *, product=None, mac=None, name=None):
-        await self.reply({
+        self.reply({
             "client_id": 1,
             "token_id": 1,
             "token_secret": "abc"
@@ -93,7 +94,7 @@ class CheckActivation(CommandHandler):
     name = 'check_activation'
 
     async def run(self, *, secrethash=None):
-        raise Exception("not supported")
+        self.reply_exception(NotImplementedError(), name='notregistered')
 
 
 @export
@@ -102,7 +103,9 @@ class Bind(CommandHandler):
     name = 'bind'
 
     async def run(self, *, client_id=None):
-        self.server.register_rpc_handle(client_id)
+        #self.server.register_rpc_handle(client_id)
+        # XXX: HMMMM
+        self.reply(None)  # Ack
 
 
 @export
@@ -112,9 +115,32 @@ class StartPoll(CommandHandler):
 
     async def run(self, *, args=None):
         self.conn.poll_id = self.msg_id
-        #return {"response_queue": "return_addr", "response_id": 0, "request": {
-        #    "system": "cs", "options": {}, "command": "get"}}
+        self.reply({
+            "response_queue": "return_addr",
+            "response_id": 0,
+            "request": {
+                "system": "cs",
+                "command": "get",
+                "options": {
+                    "path": "status.product_info.mac0"
+                },
+                "event_trigger": {
+                    "system": "cs",
+                    "id": 0,
+                    "trigger": {
+                        "event": 'put',
+                        "path": 'config',
+                        "delay": 0
+                    }
+                }
+            }
+        })
 
+import time
+last = start = time.perf_counter()
+import itertools
+counter = itertools.count()
+last_c = 0
 
 @export
 class Post(CommandHandler):
@@ -123,4 +149,12 @@ class Post(CommandHandler):
     name = 'post'
 
     async def run(self, *, queue=None, id=None, value=None):
-        logger.critical("post %s %s %s" % (queue, id, value))
+        c = next(counter)
+        self.reply(None)
+        now = time.perf_counter()
+        if now - last > 5:
+            global last_c, last
+            print("%d msg/s" % round((c - last_c) / (now - last)))
+            last_c = c
+            last = now
+        #logger.critical("post %s %s %s" % (queue, id, value))

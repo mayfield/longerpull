@@ -4,67 +4,75 @@ Longer Pull Server
 
 import aiocluster
 import asyncio
+import functools
 import logging
-from . import connection, commands, rpc
+import socket
+from . import connection, commands
 
 logger = logging.getLogger('lp.server')
 
 
-class Server(aiocluster.WorkerService):
+@functools.lru_cache(maxsize=4096)
+def get_handler(cmd, conn, server, cmd_id):
+    """ Cache command instances for performance. """
+    return commands.handlers[cmd](conn, server, cmd_id)
+
+
+class LPServer(aiocluster.WorkerService):
 
     def __init__(self, *args, **kwargs):
         self.connections = set()
         super().__init__(*args, **kwargs)
 
-    async def start(self, addr='0.0.0.0', port=8001):
+    async def run(self, addr='0.0.0.0', port=8001):
         server = await asyncio.start_server(self.on_connect, addr, port,
-                                            reuse_port=True, loop=self.loop)
+                                            reuse_port=True, backlog=1000,
+                                            loop=self._loop)
         await server.wait_closed()
 
     def on_connect(self, reader, writer):
         """ Handle new LP connection. """
+        self.adj_socket(writer.get_extra_info('socket'))
         conn = connection.LPServerConnection(reader, writer)
         self.connections.add(conn)
-        t = self.loop.create_task(self.monitor_connection(conn))
+        t = self._loop.create_task(self.monitor_connection(conn))
         t.conn = conn
         t.add_done_callback(self.on_finish)
 
+    def adj_socket(self, sock):
+        """ Disable Nagle algo, etc. """
+        assert not sock.getsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY)
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+
     async def monitor_connection(self, conn):
-        logger.warning("Connected: %s" % conn)
+        logger.info("Connected: %s" % conn)
         try:
             await conn.check_version()
         except connection.BadVersion as e:
             logger.warning(e)
             return
+        nokwargs = {}
+        cmd_handlers = commands.handlers
         while True:
+            cmd_id, cmd = await conn.recv()
+            handler = cmd_handlers[cmd['command']](conn, self, cmd_id)
+            kwargs = cmd['args'] if 'args' in cmd else nokwargs
             try:
-                cmd_id, cmd = await conn.recv()
-            except EOFError:
-                logger.warning("Disconnected: %s" % conn)
-                break
-            Handler = commands.handlers[cmd['command']]
-            handler = Handler(conn, self, cmd_id)
-            try:
-                envelope = {
-                    "success": True,
-                    "data": await handler.run(**cmd.get('args', {}))
-                }
+                await handler.run(**kwargs)
             except Exception as e:
-                logger.exception('Command Exception')
-                envelope = {
-                    "success": False,
-                    "exception": type(e).__name__,
-                    "message": str(e)
-                }
-            await conn.send(cmd_id, envelope)
+                logger.exception('Command Exception: %s' % handler.name)
+                break
 
     def on_finish(self, task):
         conn = task.conn
         task.conn = None
         self.connections.remove(conn)
+        conn.close()
         try:
             task.result()
-        except:
+        except (ConnectionResetError, EOFError):
+            pass
+        except Exception:
             logger.exception('Connection Exception')
-        conn.close()
-        logger.warning("Finished: %s" % conn)
+        finally:
+            logger.warning("Finished: %s" % conn)

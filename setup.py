@@ -1,4 +1,5 @@
 from setuptools import setup, find_packages
+from distutils.core import Extension
 
 README = 'README.md'
 
@@ -25,6 +26,12 @@ setup(
     license='MIT',
     long_description=long_desc(),
     packages=find_packages(),
+    ext_modules=[
+        Extension('longerpull._protocol',
+                  sources=['longerpull/_protocol.c'],
+                  libraries=['z']
+        )
+    ],
     test_suite='test',
     install_requires=requirements,
     classifiers=[

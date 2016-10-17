@@ -19,20 +19,23 @@ struct preamble {
 
 
 
-static unsigned char get_sof(int value) {
+static inline unsigned char get_sof(int value) {
     return sof_magic ^ (value ^ 0xff);
 }
 
 
 static PyObject *encode_preamble(PyObject *self, PyObject *args) {
     struct preamble p;
+    Py_buffer data;
     unsigned int size;
     unsigned int msg_id;
 
-    if (!PyArg_ParseTuple(args, "IIp:encode_preamble", &msg_id, &size,
+    if (!PyArg_ParseTuple(args, "Iy*p:encode_preamble", &msg_id, &data,
                           &p.is_compressed))
         return NULL;
-    size += 1; /* size includes compression byte. */
+    /* Add 1 to data.len to account for compression byte. */
+    size = data.len + 1;
+    PyBuffer_Release(&data);
     p.sof = get_sof(size + msg_id);
     p.size = htonl(size);
     p.msg_id = htonl(msg_id);
@@ -88,18 +91,11 @@ static PyObject *decode_preamble(PyObject *self, PyObject *args) {
 }
 
 
-static PyObject *decode_message(PyObject *self, PyObject *args) {
-    Py_RETURN_NONE;
-}
-
-
 static PyMethodDef _protocol_methods[] = {
     {"encode_preamble", encode_preamble, METH_VARARGS,
-        "Encode preamble of an encoded message."},
+        "Encode a message preamble."},
     {"decode_preamble", decode_preamble, METH_VARARGS,
-        "Decode just the preamble to data."},
-    {"decode_message", decode_message, METH_VARARGS,
-        "Decode the message body of a incoming stream."},
+        "Decode the preamble of message."},
     {NULL, NULL, 0, NULL}
 };
 

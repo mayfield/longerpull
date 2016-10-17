@@ -47,12 +47,12 @@ class LPConnection(object):
         return self.chksum_magic ^ ((value & 0xff) ^ 0xff)
 
     def encode_message(self, value):
-        is_compressed = False
+        is_compressed = True
         data = ujson.dumps(value, ensure_ascii=False).encode()
-        return data, is_compressed
+        return zlib.compress(data), is_compressed
 
-    def encode_preamble(self, msg_id, size, is_compressed):
-        size += 1  # size includes the compression byte.
+    def encode_preamble(self, msg_id, data, is_compressed):
+        size = len(data) + 1  # size includes the compression byte.
         chksum = self.chksum(size + msg_id)
         return self.preamble.pack(chksum, size, msg_id, is_compressed)
 
@@ -92,5 +92,5 @@ class LPServerConnection(LPConnection):
     def send(self, msg_id, message, drain=True):
         """ Send a message/reply to the client. """
         data, is_compressed = self.encode_message(message)
-        preamble = self.encode_preamble(msg_id, len(data), is_compressed)
+        preamble = self.encode_preamble(msg_id, data, is_compressed)
         self.writer.write(preamble + data)

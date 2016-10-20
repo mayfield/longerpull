@@ -27,40 +27,23 @@ class LPConnection(object):
         'writer'
     )
     version = 1
-    chksum_magic = 194
-    preamble = struct.Struct("!BIIB")
-    identer = itertools.count()
+    _identer = itertools.count()
+    _preamble_size = 10
 
     def __init__(self, reader, writer):
-        self.ident = next(self.identer)
+        self.ident = next(self._identer)
         self.reader = reader
         self.writer = writer
         self.peername = '%s:%d' % writer.get_extra_info('socket').getpeername()
-        self.encode_preamble = _protocol.encode_preamble
-        self.decode_preamble = _protocol.decode_preamble
 
     def __str__(self):
         return '<%s [%s] ident:%d>' % (type(self).__qualname__, self.peername,
                                        self.ident)
 
-    def chksum(self, value):
-        return self.chksum_magic ^ ((value & 0xff) ^ 0xff)
-
     def encode_message(self, value):
         is_compressed = True
         data = ujson.dumps(value, ensure_ascii=False).encode()
         return zlib.compress(data), is_compressed
-
-    def encode_preamble(self, msg_id, data, is_compressed):
-        size = len(data) + 1  # size includes the compression byte.
-        chksum = self.chksum(size + msg_id)
-        return self.preamble.pack(chksum, size, msg_id, is_compressed)
-
-    def decode_preamble(self, data):
-        chksum, size, msg_id, is_compressed = self.preamble.unpack(data)
-        if chksum != self.chksum(size + msg_id):
-            raise ValueError('chksum error')
-        return size, msg_id, not not is_compressed
 
     def decode_message(self, data, is_compressed):
         if is_compressed:
@@ -83,14 +66,14 @@ class LPServerConnection(LPConnection):
         """ Read preamble and then full message data from reader stream.
         Parse the message and return a tuple of the msg id and message
         value. """
-        data = await self.reader.readexactly(self.preamble.size)
-        size, msg_id, is_compressed = self.decode_preamble(data)
-        data = await self.reader.readexactly(size - 1)
+        data = await self.reader.readexactly(self._preamble_size)
+        size, msg_id, is_compressed = _protocol.decode_preamble(data)
+        data = await self.reader.readexactly(size)
         message = self.decode_message(data, is_compressed)
         return msg_id, message
 
-    def send(self, msg_id, message, drain=True):
+    def send(self, msg_id, message):
         """ Send a message/reply to the client. """
         data, is_compressed = self.encode_message(message)
-        preamble = self.encode_preamble(msg_id, data, is_compressed)
+        preamble = _protocol.encode_preamble(msg_id, data, is_compressed)
         self.writer.write(preamble + data)

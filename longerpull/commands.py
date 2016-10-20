@@ -42,7 +42,7 @@ class CommandHandler(object):
 
     def reply(self, message):
         """ Send a successful reply message. """
-        self.conn.send(self.msg_id, {
+        self.conn.send_message(self.msg_id, {
             "success": True,
             "data": message
         })
@@ -59,7 +59,7 @@ class CommandHandler(object):
             "message": msg,
         }
         resp.update(extra)
-        self.conn.send(self.msg_id, resp)
+        self.conn.send_message(self.msg_id, resp)
 
     async def run(self, **command_args):
         raise NotImplementedError("Must be defined in subclass")

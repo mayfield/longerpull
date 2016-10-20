@@ -70,7 +70,7 @@ static PyObject *decode_preamble(PyObject *self, PyObject *args) {
     }
 
     /* This benches a little faster then Py_BuildValue */
-    if ((psize = PyLong_FromUnsignedLong(size)) == NULL ||
+    if ((psize = PyLong_FromUnsignedLong(size - 1)) == NULL ||
         (pmsg_id = PyLong_FromUnsignedLong(msg_id)) == NULL ||
         (pis_compressed = PyBool_FromLong(p->is_compressed)) == NULL ||
         (ret = PyTuple_New(3)) == NULL)

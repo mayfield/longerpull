@@ -3,11 +3,10 @@ Longer Pull Server
 """
 
 import aiocluster
-import asyncio
 import functools
 import logging
 import socket
-from . import connection, commands
+from . import protocol, commands
 
 logger = logging.getLogger('lp.server')
 
@@ -25,58 +24,40 @@ class LPServer(aiocluster.WorkerService):
         super().__init__(*args, **kwargs)
 
     async def run(self, addr='0.0.0.0', port=8001):
-        server = await asyncio.start_server(self.on_connect, addr, port,
-                                            reuse_port=True, backlog=1000,
-                                            loop=self._loop)
+        server = await self._loop.create_server(self.protocol_factory, addr,
+                                                port, reuse_port=True)
         await server.wait_closed()
 
-    def on_connect(self, reader, writer):
-        """ Handle new LP connection. """
-        self.adj_socket(writer.get_extra_info('socket'))
-        conn = connection.LPServerConnection(reader, writer)
-        self.connections.add(conn)
-        t = self._loop.create_task(self.monitor_connection(conn))
-        t.conn = conn
-        t.add_done_callback(self.on_finish)
+    def protocol_factory(self):
+        connect_waiter = self._loop.create_future()
+        c = protocol.LPConnection(connect_waiter, loop=self._loop)
+        connect_waiter.add_done_callback(self.on_connect)
+        return c.protocol
 
-    def adj_socket(self, sock):
-        """ Disable Nagle algo, etc. """
-        assert not sock.getsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY)
-        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    def on_connect(self, f):
+        conn = f.result()
+        self._loop.create_task(self.monitor_connection(conn))
 
-    async def monitor_connection(self, conn):
-        logger.info("Connected: %s" % conn)
-        try:
-            await conn.check_version()
-        except connection.BadVersion as e:
-            logger.warning(e)
-            return
-        nokwargs = {}
+    async def monitor_connection(self, conn, _nokwargs={}):
         cmd_handlers = commands.handlers
-        while True:
-            cmd_id, cmd = await conn.recv()
-            handler = cmd_handlers[cmd['command']](conn, self, cmd_id)
-            kwargs = cmd['args'] if 'args' in cmd else nokwargs
-            try:
-                await handler.run(**kwargs)
-            except Exception as e:
-                logger.exception('Command Exception: %s' % handler.name)
-                break
-
-    def on_finish(self, task):
-        conn = task.conn
-        task.conn = None
-        self.connections.remove(conn)
-        conn.close()
+        self.connections.add(conn)
         try:
-            task.result()
-        except (ConnectionResetError, EOFError):
+            while True:
+                cmd_id, cmd = await conn.recv_message()
+                handler = cmd_handlers[cmd['command']](conn, self, cmd_id)
+                kwargs = cmd['args'] if 'args' in cmd else _nokwargs
+                try:
+                    await handler.run(**kwargs)
+                except Exception as e:
+                    logger.exception('Command Exception: %s' % handler.name)
+                    break
+        except (protocol.ConnectionLost, ConnectionResetError):
             pass
-        except OSError as exc:
-            logger.exception('XXX You should probably be handling this.  Check it out')
-            import pdb
-            pdb.set_trace()
         except Exception:
             logger.exception('Connection Exception')
         finally:
-            logger.warning("Finished: %s" % conn)
+            logger.warning("Closing: %s" % conn)
+            self.connections.remove(conn)
+            conn.close()
+            print("check for cycles ")
+            assert conn.protocol._conn is None

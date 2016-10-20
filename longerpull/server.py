@@ -72,6 +72,10 @@ class LPServer(aiocluster.WorkerService):
             task.result()
         except (ConnectionResetError, EOFError):
             pass
+        except OSError as exc:
+            logger.exception('XXX You should probably be handling this.  Check it out')
+            import pdb
+            pdb.set_trace()
         except Exception:
             logger.exception('Connection Exception')
         finally:

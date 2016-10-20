@@ -152,8 +152,8 @@ class Post(CommandHandler):
         c = next(counter)
         self.reply(None)
         now = time.perf_counter()
+        global last_c, last
         if now - last > 5:
-            global last_c, last
             print("%d msg/s" % round((c - last_c) / (now - last)))
             last_c = c
             last = now

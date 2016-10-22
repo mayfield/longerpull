@@ -5,7 +5,6 @@ Longer Pull Server
 import aiocluster
 import functools
 import logging
-import socket
 from . import protocol, commands
 
 logger = logging.getLogger('lp.server')
@@ -25,7 +24,8 @@ class LPServer(aiocluster.WorkerService):
 
     async def run(self, addr='0.0.0.0', port=8001):
         server = await self._loop.create_server(self.protocol_factory, addr,
-                                                port, reuse_port=True)
+                                                port, reuse_port=True,
+                                                backlog=15000)
         await server.wait_closed()
 
     def protocol_factory(self):
@@ -46,18 +46,15 @@ class LPServer(aiocluster.WorkerService):
                 cmd_id, cmd = await conn.recv_message()
                 handler = cmd_handlers[cmd['command']](conn, self, cmd_id)
                 kwargs = cmd['args'] if 'args' in cmd else _nokwargs
-                try:
-                    await handler.run(**kwargs)
-                except Exception as e:
-                    logger.exception('Command Exception: %s' % handler.name)
-                    break
-        except (protocol.ConnectionLost, ConnectionResetError):
+                await handler.run(**kwargs)
+        except (protocol.ConnectionLost, ConnectionError):
             pass
         except Exception:
             logger.exception('Connection Exception')
         finally:
-            logger.warning("Closing: %s" % conn)
+            # XXX
+            #logger.warning("Closing: %s" % conn)
             self.connections.remove(conn)
             conn.close()
-            print("check for cycles ")
+            #print("XXX: checking for cycles ")
             assert conn.protocol._conn is None

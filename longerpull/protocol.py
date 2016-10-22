@@ -29,11 +29,14 @@ class ConnectionLost(ConnectionException):
 class LPConnection(object):
 
     _identer = itertools.count()
+    _pause_threshold = 2
+    _resume_threshold = 0
 
     def __init__(self, connect_waiter, loop=None):
         self._recv_waiter = None
         self._recv_queue = collections.deque()
         self._loop = loop
+        self._paused = False
         self.ident = next(self._identer)
         self.protocol = LPProtocol(self, connect_waiter)
 
@@ -49,7 +52,11 @@ class LPConnection(object):
     def feed_message(self, msg):
         if self._recv_waiter is None:
             self._recv_queue.append(msg)
-            logger.warning("Queue message; qsize:%d" % len(self._recv_queue))
+            if not self._paused and \
+               len(self._recv_queue) >= self._pause_threshold:
+                #logger.warning("Pausing: %s" % self)
+                self.protocol.transport.pause_reading()
+                self._paused = True
         else:
             f = self._recv_waiter
             self._recv_waiter = None
@@ -68,8 +75,14 @@ class LPConnection(object):
         f = self._loop.create_future()
         if self._recv_queue:
             msg = self._recv_queue.popleft()
+            if self._paused and len(self._recv_queue) < self._resume_threshold:
+                self.protocol.transport.resume_reading()
+                self._paused = False
             f.set_result(msg)
         else:
+            if self._paused and self._resume_threshold == 0:
+                self.protocol.transport.resume_reading()
+                self._paused = False
             self._recv_waiter = f
         return f
 
@@ -116,12 +129,13 @@ class LPProtocol(asyncio.Protocol):
         self._waiting_bytes = 1
         self._msg_id = 0
         self._is_compressed = None
-        logger.info('Connected: %s' % self._conn)
-        self._connect_waiter.set_result(self._conn)
+        # XXX
+        #logger.info('Connected: %s' % self._conn)
+        waiter = self._connect_waiter
         self._connect_waiter = None
+        waiter.set_result(self._conn)
 
     def data_received(self, data):
-        assert data
         buf = self._buffer
         buf.extend(data)
         while len(buf) >= self._waiting_bytes:

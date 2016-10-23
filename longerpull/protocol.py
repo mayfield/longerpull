@@ -29,7 +29,7 @@ class ConnectionLost(ConnectionException):
 class LPConnection(object):
 
     _identer = itertools.count()
-    _pause_threshold = 2
+    _pause_threshold = 10
     _resume_threshold = 0
 
     def __init__(self, connect_waiter, loop=None):
@@ -54,7 +54,7 @@ class LPConnection(object):
             self._recv_queue.append(msg)
             if not self._paused and \
                len(self._recv_queue) >= self._pause_threshold:
-                #logger.warning("Pausing: %s" % self)
+                logger.warning("Pausing: %s" % self)
                 self.protocol.transport.pause_reading()
                 self._paused = True
         else:
@@ -75,15 +75,13 @@ class LPConnection(object):
         f = self._loop.create_future()
         if self._recv_queue:
             msg = self._recv_queue.popleft()
-            if self._paused and len(self._recv_queue) < self._resume_threshold:
-                self.protocol.transport.resume_reading()
-                self._paused = False
             f.set_result(msg)
         else:
-            if self._paused and self._resume_threshold == 0:
-                self.protocol.transport.resume_reading()
-                self._paused = False
             self._recv_waiter = f
+        if self._paused and len(self._recv_queue) <= self._resume_threshold:
+            logger.warning("Resuming: %s" % self)
+            self.protocol.transport.resume_reading()
+            self._paused = False
         return f
 
     def send_message(self, msg_id, msg):
@@ -114,6 +112,8 @@ class LPProtocol(asyncio.Protocol):
     def decode_message(self, data, is_compressed):
         if is_compressed:
             data = zlib.decompress(data)
+        else:
+            data = data.tobytes()
         return ujson.loads(data)
 
     def create_message(self, msg_id, message):
@@ -125,40 +125,41 @@ class LPProtocol(asyncio.Protocol):
     def connection_made(self, transport):
         self.transport = transport
         self.state = self._states.connect
-        self._buffer = bytearray()
+        self._buffer = None
         self._waiting_bytes = 1
         self._msg_id = 0
         self._is_compressed = None
-        # XXX
-        #logger.info('Connected: %s' % self._conn)
+        logger.info('Connected: %s' % self._conn)
         waiter = self._connect_waiter
         self._connect_waiter = None
         waiter.set_result(self._conn)
 
     def data_received(self, data):
-        buf = self._buffer
-        buf.extend(data)
-        while len(buf) >= self._waiting_bytes:
-            data = buf[:self._waiting_bytes]
-            del buf[:self._waiting_bytes]
+        if self._buffer is not None:
+            self._buffer.extend(data)
+            data = self._buffer
+            self._buffer = None
+        view = memoryview(data)
+        while len(view) >= self._waiting_bytes:
+            block = view[:self._waiting_bytes]
+            view = view[self._waiting_bytes:]
             if self.state is self._states.preamble:
                 self._waiting_bytes, self._msg_id, self._is_compressed = \
-                    _protocol.decode_preamble(data)
+                    _protocol.decode_preamble(block)
                 self.state = self._states.data
             elif self.state is self._states.data:
-                message = self.decode_message(bytes(data), self._is_compressed)
-                msg_id = self._msg_id
-                self._is_compressed = None
-                self._msg_id = None
+                message = self.decode_message(block, self._is_compressed)
+                self._conn.feed_message((self._msg_id, message))
                 self._waiting_bytes = self._preamble_size
                 self.state = self._states.preamble
-                self._conn.feed_message((msg_id, message))
             elif self.state is self._states.connect:
-                version = data[0]
+                version = block[0]
                 if version != self.version:
                     raise BadVersion('Unsupported version: %d' % version)
-                self.state = self._states.preamble
                 self._waiting_bytes = self._preamble_size
+                self.state = self._states.preamble
+        if view:
+            self._buffer = bytearray(view)
 
     def connection_lost(self, exc):
         conn = self._conn

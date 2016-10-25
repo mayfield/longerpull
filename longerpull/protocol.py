@@ -204,3 +204,12 @@ class LPProtocol(object):
             except ConnectionLost as e:
                 exc = e
         conn.feed_exception(exc)
+
+    def eof_received(self):
+        pass
+
+    def pause_writing(self):
+        pass
+
+    def resume_writing(self):
+        pass

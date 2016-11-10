@@ -2,22 +2,15 @@
 Longer Pull Server
 """
 
-import aiocluster
 import asyncio
-import functools
 import logging
+import shellish
 from . import protocol, commands
 
 logger = logging.getLogger('lp.server')
 
 
-@functools.lru_cache(maxsize=4096)
-def get_handler(cmd, conn, server, cmd_id):
-    """ Cache command instances for performance. """
-    return commands.handlers[cmd](conn, server, cmd_id)
-
-
-class LPServer(aiocluster.WorkerService):
+class LPServer(shellish.Command):
 
     def __init__(self, *args, **kwargs):
         self.connections = set()
@@ -28,12 +21,17 @@ class LPServer(aiocluster.WorkerService):
         self.conn_recv_direct = 0
         super().__init__(*args, **kwargs)
 
-    async def run(self, addr='0.0.0.0', port=8001):
-        server = await self._loop.create_server(self.protocol_factory, addr,
-                                                port, reuse_port=True,
-                                                backlog=10000)
+    def setup_args(self, parser):
+        self.add_argument("--addr", default='0.0.0.0')
+        self.add_argument("--port", default=8001, type=int)
+
+    async def run(self, args):
+        addr = args.addr
+        port = args.port
+        lpserver = await self._loop.create_server(self.protocol_factory, addr,
+                                                  port, reuse_port=True)
         self._loop.create_task(self.xxx_debug_stuff())
-        await server.wait_closed()
+        await lpserver.wait_closed()
 
     async def xxx_debug_stuff(self):
         import psutil
@@ -70,7 +68,7 @@ class LPServer(aiocluster.WorkerService):
                 print("mem est:          ", mem_est, mem / mem_est)
                 print("msg_buffers:      ", msg_buffers, msg_buffers / conn_count)
                 print("protocol buffer:  ", pbuf, pbuf / conn_count)
-            await asyncio.sleep(1)
+            await asyncio.sleep(10)
 
     def protocol_factory(self):
         connect_waiter = self._loop.create_future()

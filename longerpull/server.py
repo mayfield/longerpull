@@ -12,6 +12,8 @@ logger = logging.getLogger('lp.server')
 
 class LPServer(shellish.Command):
 
+    name = 'lpserver'
+
     def __init__(self, *args, **kwargs):
         self.connections = set()
         self.conn_pause_count = 0

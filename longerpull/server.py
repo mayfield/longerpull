@@ -2,81 +2,102 @@
 Longer Pull Server
 """
 
-import aiocluster
 import asyncio
-import functools
 import logging
-import socket
-from . import connection, commands
+import shellish
+from . import protocol, commands
 
 logger = logging.getLogger('lp.server')
 
 
-@functools.lru_cache(maxsize=4096)
-def get_handler(cmd, conn, server, cmd_id):
-    """ Cache command instances for performance. """
-    return commands.handlers[cmd](conn, server, cmd_id)
+class LPServer(shellish.Command):
 
-
-class LPServer(aiocluster.WorkerService):
+    name = 'lpserver'
 
     def __init__(self, *args, **kwargs):
         self.connections = set()
+        self.conn_pause_count = 0
+        self.conn_recv_enqueue = 0
+        self.conn_recv_dequeue = 0
+        self.conn_recv_wait = 0
+        self.conn_recv_direct = 0
         super().__init__(*args, **kwargs)
 
-    async def run(self, addr='0.0.0.0', port=8001):
-        server = await asyncio.start_server(self.on_connect, addr, port,
-                                            reuse_port=True, backlog=1000,
-                                            loop=self._loop)
-        await server.wait_closed()
+    def setup_args(self, parser):
+        self.add_argument("--addr", default='0.0.0.0')
+        self.add_argument("--port", default=8001, type=int)
 
-    def on_connect(self, reader, writer):
-        """ Handle new LP connection. """
-        self.adj_socket(writer.get_extra_info('socket'))
-        conn = connection.LPServerConnection(reader, writer)
-        self.connections.add(conn)
-        t = self._loop.create_task(self.monitor_connection(conn))
-        t.conn = conn
-        t.add_done_callback(self.on_finish)
+    async def run(self, args):
+        addr = args.addr
+        port = args.port
+        lpserver = await self._loop.create_server(self.protocol_factory, addr,
+                                                  port, reuse_port=True)
+        self._loop.create_task(self.xxx_debug_stuff())
+        await lpserver.wait_closed()
 
-    def adj_socket(self, sock):
-        """ Disable Nagle algo, etc. """
-        assert not sock.getsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY)
-        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-
-    async def monitor_connection(self, conn):
-        logger.info("Connected: %s" % conn)
-        try:
-            await conn.check_version()
-        except connection.BadVersion as e:
-            logger.warning(e)
-            return
-        nokwargs = {}
-        cmd_handlers = commands.handlers
+    async def xxx_debug_stuff(self):
+        import psutil
+        ps = psutil.Process()
         while True:
-            cmd_id, cmd = await conn.recv()
-            handler = cmd_handlers[cmd['command']](conn, self, cmd_id)
-            kwargs = cmd['args'] if 'args' in cmd else nokwargs
-            try:
-                await handler.run(**kwargs)
-            except Exception as e:
-                logger.exception('Command Exception: %s' % handler.name)
-                break
+            msg_buffers = 0
+            msg_buffer_sz_est = 0
+            pbuf = 0
+            paused = 0
+            for x in self.connections:
+                if x.protocol._buffer:
+                    pbufsize = len(x.protocol._buffer)
+                else:
+                    pbufsize = 0
+                msg_buffers += len(x._recv_queue) if x._recv_queue else 0
+                pbuf += pbufsize
+                paused += int(x._paused)
+            conn_count = len(self.connections)
+            if conn_count:
+                mem = ps.memory_info().rss
+                per_conn_est = 26700 * conn_count
+                mem_est = per_conn_est + msg_buffer_sz_est
+                print()
+                #print("ev scheduled:     ", len(self._loop._scheduled))
+                #print("ev ready:         ", len(self._loop._ready))
+                print("recv direct:      ", self.conn_recv_direct)
+                print("recv enqueue:     ", self.conn_recv_enqueue)
+                print("recv dequeue:     ", self.conn_recv_dequeue)
+                print("recv wait:        ", self.conn_recv_wait)
+                print("conns:            ", conn_count)
+                print("paused conns:     ", paused)
+                print("paused count:     ", self.conn_pause_count)
+                print("mem:              ", mem, mem / conn_count)
+                print("mem est:          ", mem_est, mem / mem_est)
+                print("msg_buffers:      ", msg_buffers, msg_buffers / conn_count)
+                print("protocol buffer:  ", pbuf, pbuf / conn_count)
+            await asyncio.sleep(10)
 
-    def on_finish(self, task):
-        conn = task.conn
-        task.conn = None
-        self.connections.remove(conn)
-        conn.close()
+    def protocol_factory(self):
+        connect_waiter = self._loop.create_future()
+        c = protocol.LPConnection(connect_waiter, server=self,
+                                  loop=self._loop)
+        connect_waiter.add_done_callback(self.on_connect)
+        return c.protocol
+
+    def on_connect(self, f):
+        conn = f.result()
+        self._loop.create_task(self.monitor_connection(conn))
+
+    async def monitor_connection(self, conn, _nokwargs={}):
+        logger.info('Established: %s' % conn)
+        cmd_handlers = commands.handlers
+        self.connections.add(conn)
         try:
-            task.result()
-        except (ConnectionResetError, EOFError):
+            while True:
+                cmd_id, cmd = await conn.recv_message()
+                handler = cmd_handlers[cmd['command']](conn, self, cmd_id)
+                kwargs = cmd['args'] if 'args' in cmd else _nokwargs
+                await handler.run(**kwargs)
+        except (protocol.ConnectionLost, ConnectionError):
             pass
-        except OSError as exc:
-            logger.exception('XXX You should probably be handling this.  Check it out')
-            import pdb
-            pdb.set_trace()
         except Exception:
             logger.exception('Connection Exception')
         finally:
-            logger.warning("Finished: %s" % conn)
+            logger.warning("Closing: %s" % conn)
+            self.connections.remove(conn)
+            conn.close()

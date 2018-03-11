@@ -2,7 +2,6 @@
 Server side protocol
 """
 
-import asyncio
 import collections
 import enum
 import itertools
@@ -43,7 +42,7 @@ class LPConnection(object):
 
     def __init__(self, connect_waiter, server=None, loop=None):
         self._recv_waiter = None
-        self._recv_queue = None#collections.deque()
+        self._recv_queue = None
         self._server = server
         self._loop = loop
         self._paused = False
@@ -57,7 +56,7 @@ class LPConnection(object):
         else:
             peername = 'unconnected'
         return '<%s [%s] ident:%d>' % (type(self).__name__, peername,
-            self.ident)
+                                       self.ident)
 
     def feed_message(self, msg_id, data, is_compressed):
         """ Decode and deliver (or enqueue) a message from the client.  The
@@ -183,7 +182,8 @@ class LPProtocol(object):
                     _protocol.decode_preamble(block)
                 self.state = self._states.data
             elif self.state is self._states.data:
-                self._conn.feed_message(self._msg_id, block, self._is_compressed)
+                self._conn.feed_message(self._msg_id, block,
+                                        self._is_compressed)
                 self._waiting_bytes = self._preamble_size
                 self.state = self._states.preamble
             elif self.state is self._states.connect:

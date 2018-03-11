@@ -103,7 +103,7 @@ class Bind(CommandHandler):
     name = 'bind'
 
     async def run(self, *, client_id=None):
-        #self.server.register_rpc_handle(client_id)
+        # self.server.register_rpc_handle(client_id)
         # XXX: HMMMM
         self.reply(None)  # Ack
 
@@ -142,6 +142,7 @@ import itertools
 counter = itertools.count()
 last_c = 0
 
+
 @export
 class Post(CommandHandler):
     """ Message resulting from an event trigger placed on a client. """
@@ -157,4 +158,4 @@ class Post(CommandHandler):
             print("%d msg/s" % round((c - last_c) / (now - last)))
             last_c = c
             last = now
-        #logger.critical("post %s %s %s" % (queue, id, value))
+        # logger.critical("post %s %s %s" % (queue, id, value))

@@ -57,8 +57,8 @@ class LPServer(shellish.Command):
                 per_conn_est = 26700 * conn_count
                 mem_est = per_conn_est + msg_buffer_sz_est
                 print()
-                #print("ev scheduled:     ", len(self._loop._scheduled))
-                #print("ev ready:         ", len(self._loop._ready))
+                # print("ev scheduled:     ", len(self._loop._scheduled))
+                # print("ev ready:         ", len(self._loop._ready))
                 print("recv direct:      ", self.conn_recv_direct)
                 print("recv enqueue:     ", self.conn_recv_enqueue)
                 print("recv dequeue:     ", self.conn_recv_dequeue)
@@ -68,7 +68,8 @@ class LPServer(shellish.Command):
                 print("paused count:     ", self.conn_pause_count)
                 print("mem:              ", mem, mem / conn_count)
                 print("mem est:          ", mem_est, mem / mem_est)
-                print("msg_buffers:      ", msg_buffers, msg_buffers / conn_count)
+                print("msg_buffers:      ", msg_buffers,
+                      msg_buffers / conn_count)
                 print("protocol buffer:  ", pbuf, pbuf / conn_count)
             await asyncio.sleep(10)
 
